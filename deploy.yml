@@ -1,0 +1,70 @@
+---
+- name: Deploy EcoAssistant from Docker archives without target Python
+  hosts: new_servers
+  gather_facts: false
+  become: false
+
+  vars:
+    deploy_scripts_dir: /home/ecoassistant/ecoassistant_deploy_scripts
+    project_dir: /home/ecoassistant/ecoassistant_scrpt
+
+  tasks:
+    - name: Create deployment directory on target
+      raw: mkdir -p {{ deploy_scripts_dir }}
+
+    - name: Copy deployment package to target through scp from controller
+      delegate_to: localhost
+      raw: >
+        scp -P {{ hostvars[inventory_hostname].ansible_port | default(22) }}
+        -r
+        {{ playbook_dir }}/deploy.conf
+        {{ playbook_dir }}/scripts
+        {{ hostvars[inventory_hostname].ansible_user }}@{{ hostvars[inventory_hostname].ansible_host }}:{{ deploy_scripts_dir }}/
+
+    - name: Make shell scripts executable
+      raw: |
+        find {{ deploy_scripts_dir }}/scripts -type f -name "*.sh" -exec chmod +x {} \;
+
+    - name: Check shell script syntax
+      raw: |
+        bash -n {{ deploy_scripts_dir }}/scripts/lib/common.sh {{ deploy_scripts_dir }}/scripts/*.sh
+
+    - name: Run server check
+      raw: |
+        cd {{ deploy_scripts_dir }}
+        bash scripts/01_check_server.sh
+
+    - name: Prepare server
+      raw: |
+        cd {{ deploy_scripts_dir }}
+        bash scripts/02_prepare_server.sh
+
+    - name: Copy project files and Docker archives from source server
+      raw: |
+        cd {{ deploy_scripts_dir }}
+        bash scripts/03_copy_archives.sh
+
+    - name: Load Docker images
+      raw: |
+        cd {{ deploy_scripts_dir }}
+        bash scripts/04_load_images.sh
+
+    - name: Remove Docker archive files after docker load
+      raw: |
+        rm -f {{ project_dir }}/images/*.tar
+        rm -f {{ project_dir }}/images/*.tar.gz
+        rm -f {{ project_dir }}/images/*.tgz
+
+    - name: Start project through docker run
+      raw: |
+        cd {{ deploy_scripts_dir }}
+        bash scripts/06_up_project.sh
+
+    - name: Run project checks
+      raw: |
+        cd {{ deploy_scripts_dir }}
+        bash scripts/07_check_project.sh || true
+
+    - name: Show running containers
+      raw: |
+        docker ps --format 'table {{ "{{" }}.Names{{ "}}" }}\t{{ "{{" }}.Image{{ "}}" }}\t{{ "{{" }}.Status{{ "}}" }}\t{{ "{{" }}.Ports{{ "}}" }}'
